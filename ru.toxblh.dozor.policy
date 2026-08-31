@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+
+  <vendor>Dozor</vendor>
+  <vendor_url>https://github.com/Toxblh/dozor</vendor_url>
+
+  <action id="ru.toxblh.dozor.sudo">
+    <description>Run a command as administrator</description>
+    <description xml:lang="ru">Выполнение команды от имени администратора</description>
+    <message>sudo is trying to execute a command as administrator</message>
+    <message xml:lang="ru">sudo пытается выполнить команду от имени администратора</message>
+    <icon_name>utilities-terminal</icon_name>
+    <defaults>
+      <allow_any>auth_self</allow_any>
+      <allow_inactive>auth_self</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+  </action>
+
+</policyconfig>

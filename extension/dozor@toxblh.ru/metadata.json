@@ -1,0 +1,8 @@
+{
+    "uuid": "dozor@toxblh.ru",
+    "name": "Dozor",
+    "description": "Disables the built-in polkit agent so the Dozor agent can take over, and exposes window-focus DBus helper.",
+    "shell-version": ["50"],
+    "url": "https://github.com/Toxblh/dozor",
+    "session-modes": ["user"]
+}

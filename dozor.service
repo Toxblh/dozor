@@ -1,0 +1,14 @@
+[Unit]
+Description=Dozor polkit authentication agent
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 %h/git/dozor/agent.py
+Restart=on-failure
+RestartSec=3
+Slice=session.slice
+
+[Install]
+WantedBy=graphical-session.target
