@@ -108,3 +108,9 @@ DOZOR_SHOT=/tmp/x.png ...                    # screenshot a real dialog
 
 Known corners: no dialog on the lock screen (lockscreen auth requests are
 rare and simply time out); no account chooser — the current user is assumed.
+
+## Contributing / debugging
+
+If you use an AI assistant to debug or fix Dozor, point it at **[LLM.md](LLM.md)** —
+it explains the architecture, how to collect a *redacted* diagnostics report
+(`./contrib/dozor-report.sh`), and how to file an issue or PR without leaking data.
