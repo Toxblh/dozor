@@ -31,8 +31,10 @@ conversation, icon pulsing while it waits:
   type anything. The headline names the real actor, skipping wrappers and
   shells: *Allow **claude** from **Terminal** to run a command as root?*
 - **Jump to the source**: one click focuses the window of the app that asked.
-  GNOME (via a tiny Shell extension), DBus-activatable apps (fallback), and
-  niri (precise per-pid focus via `niri msg`; no extension needed there).
+  Works on any Wayland compositor: **niri**, **Hyprland** and **sway** get
+  precise per-pid focus via their IPC (no extension needed there); GNOME goes
+  through a tiny Shell extension; `org.freedesktop.Application.Activate` is the
+  universal fallback.
 - **Every auth method, visualized**: password, fingerprint (pam_fprintd,
   pulsing icon), face (howdy), security key / smartcard with PIN
   (pam_u2f / pam_pkcs11) — detected from PAM conversation messages.
@@ -59,13 +61,13 @@ sudo → PAM (pam_exec) → dozor-sudo.sh → pkcheck(ru.toxblh.dozor.sudo)
                               │ /run/user/UID/  polkitd ── BeginAuthentication
                               ▼ dozor.ctx          │
                                                    ▼
-                                           agent.py (the Dozor window)
+                                        dozor-agent (the Dozor window)
                                                    │ PolkitAgent.Session
                                                    ▼
                                    polkit-agent-helper-1 (setuid) → PAM → ok
 ```
 
-- `agent.py` — the agent. Implements the
+- `src/dozor.vala` — the agent (Vala, compiled). Implements the
   `org.freedesktop.PolicyKit1.AuthenticationAgent` DBus interface directly
   (`PolkitAgent.Listener` from Python segfaults: pygobject loses the async
   vfunc's `user_data`). Registers for the session in place of GNOME Shell's
@@ -77,15 +79,24 @@ sudo → PAM (pam_exec) → dozor-sudo.sh → pkcheck(ru.toxblh.dozor.sudo)
 - `extension/dozor@toxblh.ru` — GNOME Shell extension: disables the built-in
   agent (`Main.componentManager._disableComponent('polkitAgent')`) and exports
   `ru.toxblh.Dozor.FocusApp` (window activation is allowed from inside Shell).
-- `dozor.service` — systemd user unit, autostarts the agent.
+- `src/collector.vala` — provenance collector. Runs as a **separate process**
+  (the agent re-execs itself with `--collect`): one signed artifact, but the
+  parsing of attacker-controlled `/proc` data happens where there is no password.
+- `src/animation.vala`, `src/focus.vala` — Cairo method animations and
+  cross-compositor window focus.
+- `dozor.service` — systemd user unit, autostarts the agent (hardened:
+  `NoNewPrivileges`, `ProtectSystem=strict`, empty `CapabilityBoundingSet`,
+  `SystemCallFilter=@system-service`).
 
 ## Install
 
 ```sh
-./install.sh
+./install.sh          # builds with meson, installs to ~/.local/bin
 ```
 
-then re-login (Wayland picks up new Shell extensions only at session start).
+Needs `vala`, `meson` and the gtk4 / libadwaita / polkit / json-glib dev
+packages. No root for the agent itself — only for the PAM hook and the polkit
+action. On GNOME, re-login (Wayland picks up new Shell extensions only at session start).
 
 Fingerprint is expected to be wired in the system PAM stack behind the
 `lid-open.sh` gate (see `system-auth-local-only` on ALT):
@@ -98,12 +109,11 @@ auth  sufficient                  pam_fprintd.so
 ## Debugging
 
 ```sh
-python3 agent.py --demo                      # window with fake data
-python3 agent.py --demo --demo-state fingerprint|face|token|error
-python3 agent.py --demo --demo-movie DIR     # record README GIF frames
-python3 agent.py --test-pid $$               # agent for this shell only
+meson compile -C build                       # rebuild after editing src/*.vala
+build/dozor-agent --test-pid $$              # agent for this shell only
+build/dozor-agent --collect $$ ru.toxblh.dozor.sudo   # provenance collector alone
 journalctl --user -u dozor -f                # agent logs
-DOZOR_SHOT=/tmp/x.png ...                    # screenshot a real dialog
+DOZOR_SHOT=/tmp/x.png build/dozor-agent ...  # screenshot a real dialog
 ```
 
 Known corners: no dialog on the lock screen (lockscreen auth requests are

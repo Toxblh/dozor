@@ -121,6 +121,18 @@ HashTable<string, string>? read_sudo_ctx () {
     return kv;
 }
 
+/* Список pid'ов вверх по дереву — по нему агент находит окно в niri/Hyprland/sway. */
+string ancestors_of (int pid, int limit = 15) {
+    var sb = new StringBuilder ();
+    int cur = pid;
+    for (int n = 0; cur > 1 && n < limit; n++) {
+        if (sb.len > 0) sb.append (",");
+        sb.append (cur.to_string ());
+        cur = proc_ppid (cur);
+    }
+    return sb.str;
+}
+
 string home_relative (string p) {
     var h = Environment.get_home_dir ();
     return p.has_prefix (h) ? "~" + p.substring (h.length) : p;
@@ -155,6 +167,7 @@ public int run (int subject_pid, string action_id) {
         var shown = cmdline.has_prefix ("sudo ") ? cmdline.substring (5) : cmdline;
         o.append ("cmdline=%s\n".printf (flat (shown)));
         o.append ("caller_pid=%d\n".printf (caller));
+        o.append ("ancestors=%s\n".printf (ancestors_of (caller)));
 
         int start = int.parse (ctx.lookup ("sudo_pid") ?? "0");
         if (start == 0) start = caller;
@@ -173,6 +186,7 @@ public int run (int subject_pid, string action_id) {
         if (subject_pid <= 0) app_name = "";
         o.append ("title=Требуется подтверждение\n");
         o.append ("caller_pid=%d\n".printf (subject_pid));
+        o.append ("ancestors=%s\n".printf (ancestors_of (subject_pid)));
         if (subject_pid > 0) {
             var chain = proc_chain (subject_pid);
             keys.add ("Процессы"); vals.add (chain.length > 0 ? chain : "pid %d".printf (subject_pid));

@@ -7,9 +7,12 @@ deps = [
   dependency('polkit-gobject-1'),
   dependency('gio-2.0'),
   dependency('gio-unix-2.0'),
+  dependency('json-glib-1.0'),
+  dependency('graphene-gobject-1.0'),
   meson.get_compiler('vala').find_library('posix'),
+  meson.get_compiler('c').find_library('m', required: false),
 ]
 
-executable('dozor-agent', ['src/dozor.vala', 'src/collector.vala'], dependencies: deps, install: true,
+executable('dozor-agent', ['src/dozor.vala', 'src/collector.vala', 'src/animation.vala', 'src/focus.vala'], dependencies: deps, install: true,
   c_args: ['-DPOLKIT_AGENT_I_KNOW_API_IS_SUBJECT_TO_CHANGE', '-Wno-unused-variable'])
 

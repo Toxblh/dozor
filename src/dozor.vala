@@ -39,6 +39,7 @@ class Provenance : Object {
     public string app_icon = "";
     public string focus_app_id = "";
     public int caller_pid = 0;
+    public int[] ancestors = {};
     public string[] row_keys = {};
     public string[] row_vals = {};
 
@@ -63,6 +64,9 @@ class Provenance : Object {
                     case "app_icon":     p.app_icon = kv[1]; break;
                     case "focus_app_id": p.focus_app_id = kv[1]; break;
                     case "caller_pid":   p.caller_pid = int.parse (kv[1]); break;
+                    case "ancestors":
+                        foreach (var s in kv[1].split (",")) if (s.length > 0) p.ancestors += int.parse (s);
+                        break;
                     case "row":
                         var r = kv[1].split ("\t", 2);
                         if (r.length == 2) { p.row_keys += r[0]; p.row_vals += r[1]; }
@@ -79,6 +83,38 @@ class Provenance : Object {
 
 /* --- окно аутентификации ----------------------------------------------- */
 
+/* Содержимое окна с поддержкой «нет-нет» при неверном пароле.
+ * На Wayland клиент НЕ может двигать своё окно (позиция — дело композитора),
+ * поэтому трясём всё содержимое трансформом при отрисовке: визуально это
+ * тряска всего окна, но без рефлоу и без обращений к композитору. */
+class ShakeBox : Gtk.Box {
+    double offset = 0;
+    Adw.TimedAnimation? anim = null;   // держим ссылку, иначе соберётся GC
+
+    public ShakeBox () {
+        Object (orientation: Gtk.Orientation.VERTICAL, spacing: 14);
+    }
+
+    public override void snapshot (Gtk.Snapshot snap) {
+        if (offset == 0) { base.snapshot (snap); return; }
+        snap.save ();
+        Graphene.Point pt = { (float) offset, 0.0f };
+        snap.translate (pt);
+        base.snapshot (snap);
+        snap.restore ();
+    }
+
+    public void shake () {
+        var target = new Adw.CallbackAnimationTarget ((v) => {
+            offset = Math.sin (v * Math.PI * 5) * 14 * (1.0 - v);
+            queue_draw ();
+        });
+        anim = new Adw.TimedAnimation (this, 0, 1, 450, target);
+        anim.done.connect (() => { offset = 0; queue_draw (); });
+        anim.play ();
+    }
+}
+
 class AuthDialog : Adw.Window {
     public signal void done (bool authorized);
 
@@ -88,6 +124,8 @@ class AuthDialog : Adw.Window {
     PolkitAgent.Session? session = null;
     bool finished = false;
     bool pw_requested = false;
+    bool saw_request = false;   // PAM хоть раз что-то спросил в этой сессии
+    int attempts = 0;           // неудачных попыток подряд
     string? stash = null;   // пароль, введённый во время ожидания биометрии
 
     Adw.PasswordEntryRow pw_row;
@@ -95,7 +133,9 @@ class AuthDialog : Adw.Window {
     Gtk.Button allow;
     Gtk.Box state_box;
     Gtk.Image state_icon;
+    MethodAnimation state_anim;
     Gtk.Label state_label;
+    ShakeBox root_box;
 
     public AuthDialog (Provenance prov, Polkit.Identity identity, string cookie) {
         Object (title: "Запрос доступа", resizable: false, default_width: 420);
@@ -110,8 +150,9 @@ class AuthDialog : Adw.Window {
 
     void build () {
         var outer = new Gtk.WindowHandle ();
-        var box = new Gtk.Box (Gtk.Orientation.VERTICAL, 14) {
+        root_box = new ShakeBox () {
             margin_top = 22, margin_bottom = 22, margin_start = 22, margin_end = 22 };
+        var box = root_box;
         outer.child = box; content = outer;
 
         var title = new Gtk.Label (prov.title) { wrap = true, justify = Gtk.Justification.CENTER };
@@ -136,9 +177,11 @@ class AuthDialog : Adw.Window {
         state_box = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8) { halign = Gtk.Align.CENTER, visible = false };
         state_icon = new Gtk.Image () { pixel_size = 32 };
         state_icon.add_css_class ("dozor-method-icon");
+        state_anim = new MethodAnimation ();
+        state_anim.visible = false;
         state_label = new Gtk.Label (null) { wrap = true, justify = Gtk.Justification.CENTER, max_width_chars = 40 };
         state_label.add_css_class ("dim-label");
-        state_box.append (state_icon); state_box.append (state_label);
+        state_box.append (state_icon); state_box.append (state_anim); state_box.append (state_label);
         box.append (state_box);
 
         var pw_list = new Gtk.ListBox () { selection_mode = Gtk.SelectionMode.NONE };
@@ -199,22 +242,7 @@ class AuthDialog : Adw.Window {
         return lb;
     }
 
-    void focus_app () {
-        // основной путь — метод нашего расширения внутри gnome-shell; запасной — Application.Activate
-        try {
-            var bus = Bus.get_sync (BusType.SESSION);
-            try {
-                bus.call_sync ("org.gnome.Shell", "/ru/toxblh/Dozor", "ru.toxblh.Dozor", "FocusApp",
-                               new Variant ("(s)", prov.focus_app_id), null, DBusCallFlags.NONE, 2000);
-                return;
-            } catch (Error e) { warning ("extension FocusApp: %s", e.message); }
-            var app_id = prov.focus_app_id.has_suffix (".desktop")
-                ? prov.focus_app_id[0:prov.focus_app_id.length - 8] : prov.focus_app_id;
-            var path = "/" + app_id.replace (".", "/").replace ("-", "_");
-            bus.call_sync (app_id, path, "org.freedesktop.Application", "Activate",
-                           new Variant ("(a{sv})", new VariantDict ().end ()), null, DBusCallFlags.NONE, 2000);
-        } catch (Error e) { warning ("Application.Activate: %s", e.message); }
-    }
+    void focus_app () { Focus.focus (prov.ancestors, prov.focus_app_id); }
 
     /* --- поток аутентификации --- */
 
@@ -222,6 +250,7 @@ class AuthDialog : Adw.Window {
 
     void new_session () {
         pw_requested = false;
+        saw_request = false;
         var s = new PolkitAgent.Session (identity, cookie);
         session = s;
         s.request.connect ((req, echo) => { if (s == session) on_request (req); });
@@ -231,19 +260,38 @@ class AuthDialog : Adw.Window {
         s.initiate ();
     }
 
-    static string? method_icon (string text) {
+    /* Метод аутентификации определяем по тексту PAM-разговора:
+     * pam_fprintd, howdy и pam_u2f/pam_pkcs11 говорят разными фразами. */
+    static string? method_icon (string text, out MethodAnimation.Kind kind) {
+        kind = MethodAnimation.Kind.NONE;
         var low = text.down ();
-        if (low.contains ("finger") || low.contains ("палец") || low.contains ("отпечат")) return "auth-fingerprint-symbolic";
-        if (low.contains ("face") || low.contains ("лицо") || low.contains ("camera") || low.contains ("камер")) return "camera-web-symbolic";
-        if (low.contains ("key") || low.contains ("token") || low.contains ("card") || low.contains ("карт") || low.contains ("u2f")) return "auth-smartcard-symbolic";
+        if (low.contains ("finger") || low.contains ("палец") || low.contains ("отпечат")
+            || low.contains ("swipe") || low.contains ("fprint"))
+            return "auth-fingerprint-symbolic";                 // пульс иконки темы
+        if (low.contains ("face") || low.contains ("лицо") || low.contains ("camera")
+            || low.contains ("камер") || low.contains ("howdy")) {
+            kind = MethodAnimation.Kind.FACE; return null;      // рисуем визир
+        }
+        if (low.contains ("security key") || low.contains ("yubikey") || low.contains ("token")
+            || low.contains ("токен") || low.contains ("card") || low.contains ("карт")
+            || low.contains ("insert") || low.contains ("touch your") || low.contains ("u2f")
+            || low.contains ("fido")) {
+            kind = MethodAnimation.Kind.TOKEN; return null;     // рисуем карту со сканом
+        }
         return null;
     }
 
     void on_request (string text) {
+        saw_request = true;
         var prompt = text.strip ();
         if (prompt.has_suffix (":")) prompt = prompt[0:prompt.length - 1].strip ();
-        var icon = method_icon (prompt);
-        if (icon != null) { set_state (icon, prompt, false); open_password (); return; }   // биометрия: ввода не ждут
+        MethodAnimation.Kind kind;
+        var icon = method_icon (prompt, out kind);
+        if (icon != null || kind != MethodAnimation.Kind.NONE) {
+            set_state (icon, prompt, false, kind);   // биометрия/токен: ввода не ждут
+            open_password ();                        // но пароль доступен параллельно
+            return;
+        }
         pw_requested = true;
         if (prompt.down ().contains ("pin")) pw_row.title = "PIN-код";
         if (stash != null) {                       // пароль набрали, пока ждали палец — отдаём сразу
@@ -258,9 +306,10 @@ class AuthDialog : Adw.Window {
     }
 
     void on_info (string text) {
-        var icon = method_icon (text);
-        set_state (icon, text.strip (), false);
-        if (icon != null) open_password ();       // «и то и другое сразу»
+        MethodAnimation.Kind kind;
+        var icon = method_icon (text, out kind);
+        set_state (icon, text.strip (), false, kind);
+        if (icon != null || kind != MethodAnimation.Kind.NONE) open_password ();  // «и то и другое сразу»
     }
 
     void open_password () {
@@ -293,16 +342,38 @@ class AuthDialog : Adw.Window {
         session = null;
         if (gained) { finish (true); return; }
         if (finished) return;
+
+        // Сессия завершилась, ни о чём не спросив, — это системная поломка
+        // (например, setuid-бит у polkit-agent-helper-1 недоступен из-за
+        // NoNewPrivileges), а не неверный пароль. Повтор тут только сожжёт CPU.
+        if (!saw_request) {
+            set_state (null, "Аутентификация недоступна. Смотрите журнал: " +
+                             "journalctl --user -u dozor", true);
+            pw_revealer.reveal_child = false;
+            allow.sensitive = false;
+            return;
+        }
+        if (++attempts >= 3) {
+            set_state (null, "Слишком много неудачных попыток.", true);
+            pw_revealer.reveal_child = false;
+            allow.sensitive = false;
+            return;
+        }
         set_state (null, "Не удалось подтвердить. Попробуйте ещё раз.", true);
         pw_row.text = "";
+        root_box.shake ();          // «нет-нет» всем содержимым окна
         new_session ();
     }
 
-    void set_state (string? icon, string? text, bool error) {
+    void set_state (string? icon, string? text, bool error,
+                    MethodAnimation.Kind kind = MethodAnimation.Kind.NONE) {
         state_box.visible = text != null;
         state_label.label = text ?? "";
-        state_icon.visible = icon != null;
-        if (icon != null) state_icon.icon_name = icon;
+        var animated = kind != MethodAnimation.Kind.NONE;
+        state_anim.visible = animated;
+        if (animated) state_anim.set_kind (kind);
+        state_icon.visible = icon != null && !animated;
+        if (icon != null && !animated) state_icon.icon_name = icon;
         if (error) { state_label.add_css_class ("dozor-state-error"); state_label.remove_css_class ("dim-label"); }
         else       { state_label.remove_css_class ("dozor-state-error"); state_label.add_css_class ("dim-label"); }
     }
