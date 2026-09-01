@@ -33,13 +33,13 @@ sudo → PAM (pam_exec) → dozor-sudo.sh → pkcheck(ru.toxblh.dozor.sudo)
                               │ /run/user/UID/  polkitd ── BeginAuthentication
                               ▼ dozor.ctx          │
                                                    ▼
-                                           agent.py (окно Dozor)
+                                        dozor-agent (окно Dozor)
                                                    │ PolkitAgent.Session
                                                    ▼
                                    polkit-agent-helper-1 (setuid) → PAM → ok
 ```
 
-- `agent.py` — агент: собственная реализация DBus-интерфейса
+- `src/dozor.vala` — агент (Vala, компилируемый): реализация DBus-интерфейса
   `org.freedesktop.PolicyKit1.AuthenticationAgent` (PolkitAgent.Listener из
   Python segfault-ится — pygobject теряет user_data async-vfunc). Регистрируется
   на сессию вместо встроенного агента GNOME Shell, обслуживает **все**
@@ -52,9 +52,16 @@ sudo → PAM (pam_exec) → dozor-sudo.sh → pkcheck(ru.toxblh.dozor.sudo)
 - `extension/dozor@toxblh.ru` — расширение GNOME Shell: глушит встроенный агент
   (`Main.componentManager._disableComponent('polkitAgent')`) и экспортирует
   `ru.toxblh.Dozor.FocusApp` (изнутри Shell фокусировать окна можно).
-- Фокус окна: расширение → `org.freedesktop.Application.Activate` (fallback) →
-  на niri точный фокус по pid через `niri msg` (агенту Shell не нужен вовсе).
-- `dozor.service` — systemd user unit, автозапуск агента.
+- Фокус окна на любом Wayland-композиторе: **niri**, **Hyprland** и **sway** —
+  точный фокус по pid через их IPC (расширение там не нужно); GNOME — через
+  расширение; универсальный фолбэк — `org.freedesktop.Application.Activate`.
+- `src/collector.vala` — сбор провенанса **отдельным процессом** (агент
+  ре-exec'ает себя с `--collect`): один подписываемый артефакт, но парсинг
+  недоверенного `/proc` идёт там, где нет пароля.
+- `src/animation.vala`, `src/focus.vala` — Cairo-анимации методов и фокус окна.
+- `dozor.service` — systemd user unit, автозапуск агента (с hardening:
+  `NoNewPrivileges`, `ProtectSystem=strict`, пустой `CapabilityBoundingSet`,
+  `SystemCallFilter=@system-service`).
 - Биометрия с учётом контекста: PAM-гейт `lid-open.sh` пропускает отпечаток,
   когда крышка ноутбука закрыта (док), а поле пароля доступно **во время**
   ожидания пальца — начали вводить, нажали Enter, агент перезапустит
@@ -64,10 +71,12 @@ sudo → PAM (pam_exec) → dozor-sudo.sh → pkcheck(ru.toxblh.dozor.sudo)
 ## Установка
 
 ```sh
-./install.sh
+./install.sh          # сборка meson, установка в ~/.local/bin
 ```
 
-затем перелогиниться (Wayland подхватывает новые расширения только при входе).
+Нужны `vala`, `meson` и dev-пакеты gtk4 / libadwaita / polkit / json-glib.
+Для самого агента root не нужен — только для PAM-хука и polkit-действия.
+На GNOME затем перелогиниться (Wayland подхватывает новые расширения только при входе).
 
 Отпечаток ожидается в системном PAM-стеке за гейтом `lid-open.sh`
 (на ALT — в `system-auth-local-only`):
@@ -80,11 +89,11 @@ auth  sufficient                  pam_fprintd.so
 ## Отладка
 
 ```sh
-python3 agent.py --demo                      # окно с фейковыми данными
-python3 agent.py --demo --demo-state fingerprint|face|token|error
-python3 agent.py --test-pid $$               # агент только для этого шелла
+meson compile -C build                       # пересборка после правки src/*.vala
+build/dozor-agent --test-pid $$              # агент только для этого шелла
+build/dozor-agent --collect $$ ru.toxblh.dozor.sudo   # только коллектор провенанса
 journalctl --user -u dozor -f                # логи агента
-DOZOR_SHOT=/tmp/x.png ...                    # скриншот реального окна
+DOZOR_SHOT=/tmp/x.png build/dozor-agent ...  # скриншот реального окна
 ```
 
 Известные углы: на экране блокировки агент не показывает окно (запросы

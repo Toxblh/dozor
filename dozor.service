@@ -5,10 +5,24 @@ After=graphical-session.target
 
 [Service]
 Type=exec
-ExecStart=/usr/bin/python3 %h/git/dozor/agent.py
+ExecStart=%h/.local/bin/dozor-agent
 Restart=on-failure
 RestartSec=3
 Slice=session.slice
+
+# НЕ ДОБАВЛЯТЬ СЮДА ПЕСОЧНИЦУ. Агент обязан запускать setuid-root
+# polkit-agent-helper-1 — именно он проверяет пароль через PAM. Любая изоляция
+# systemd ломает это повышение привилегий, и helper падает с
+# "polkit-agent-helper-1: needs to be setuid root", а аутентификация умирает:
+#   * seccomp-опции (SystemCallFilter, RestrictSUIDSGID, RestrictNamespaces,
+#     RestrictRealtime, RestrictAddressFamilies, LockPersonality,
+#     SystemCallArchitectures, MemoryDenyWriteExecute) — systemd НЕЯВНО включает
+#     NoNewPrivileges, чтобы поставить фильтр;
+#   * mount-опции (ProtectSystem=, ProtectHome=, PrivateTmp=) — создают mount
+#     namespace, в котором setuid не срабатывает.
+# Проверено вживую 2026-09-01. Диагностика, если симптом вернётся:
+#   grep NoNewPrivs /proc/$(systemctl --user show dozor.service -p MainPID --value)/status
+#   ...должно быть 0, а /usr в mountinfo — как в обычном шелле.
 
 [Install]
 WantedBy=graphical-session.target

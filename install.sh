@@ -1,12 +1,23 @@
 #!/bin/sh
-# Установка Dozor. Идемпотентно, умеет мигрировать со старых имён
-# (awesome-sudo / dev.toxblh.sudo). Отпечаток решает гейт lid-open.sh перед
-# pam_fprintd в системном PAM-стеке: крышка закрыта или пользователь уже
-# вводит пароль (skip-флаг от агента) -> отпечаток пропускается сразу.
+# Установка Dozor. Идемпотентно, умеет мигрировать со старых имён.
+# Агент — скомпилированный бинарь (Vala), ставится в ~/.local/bin, поэтому
+# на immutable-системах (ALT Atomic и т.п.) root для него не нужен вовсе.
+# Root нужен только для PAM-хука, гейта отпечатка и polkit-действия.
+#
+# Отпечаток решает гейт lid-open.sh перед pam_fprintd в системном PAM-стеке:
+# крышка закрыта или пользователь уже вводит пароль -> отпечаток пропускается.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 PAM_LINE='auth\t\tsufficient\tpam_exec.so quiet /etc/security/dozor-sudo.sh'
+
+echo '== сборка агента =='
+command -v valac >/dev/null || { echo 'нужен valac (apm system install -y vala)'; exit 1; }
+command -v meson >/dev/null || { echo 'нужен meson (apm system install -y meson)'; exit 1; }
+[ -d "$HERE/build" ] || command meson setup "$HERE/build" --prefix="$HOME/.local"
+command meson compile -C "$HERE/build"
+command meson install -C "$HERE/build" >/dev/null
+echo "агент: $HOME/.local/bin/dozor-agent"
 
 echo '== системная часть (sudo) =='
 sudo sh -eu -c "
@@ -35,19 +46,25 @@ gnome-extensions disable awesome-sudo-agent@toxblh.me 2>/dev/null || true
 
 systemctl --user daemon-reload
 systemctl --user enable dozor.service
-# gnome-extensions enable не знает о ещё не загруженном расширении (Wayland
-# подхватывает новые только при входе) -- правим список включённых напрямую.
-if ! gsettings get org.gnome.shell enabled-extensions | grep -q "dozor@toxblh.ru"; then
-    cur=$(gsettings get org.gnome.shell enabled-extensions)
-    case "$cur" in
-        "@as []"|"[]") new="['dozor@toxblh.ru']" ;;
-        *) new=$(printf '%s' "$cur" | sed "s/]\$/, 'dozor@toxblh.ru']/") ;;
-    esac
-    gsettings set org.gnome.shell enabled-extensions "$new"
-fi
-gnome-extensions enable dozor@toxblh.ru 2>/dev/null || true
 
-echo
-echo 'Готово. Новое расширение GNOME Shell на Wayland подхватится после'
-echo 'выхода из сеанса и входа обратно. После этого агент стартует сам.'
+# На GNOME нужно расширение (глушит встроенный агент Shell). Wayland подхватывает
+# новые расширения только при входе, поэтому пишем uuid прямо в gsettings.
+if command -v gsettings >/dev/null && gsettings writable org.gnome.shell enabled-extensions >/dev/null 2>&1; then
+    if ! gsettings get org.gnome.shell enabled-extensions | grep -q "dozor@toxblh.ru"; then
+        cur=$(gsettings get org.gnome.shell enabled-extensions)
+        case "$cur" in
+            "@as []"|"[]") new="['dozor@toxblh.ru']" ;;
+            *) new=$(printf '%s' "$cur" | sed "s/]\$/, 'dozor@toxblh.ru']/") ;;
+        esac
+        gsettings set org.gnome.shell enabled-extensions "$new"
+    fi
+    gnome-extensions enable dozor@toxblh.ru 2>/dev/null || true
+    echo
+    echo 'GNOME: расширение подхватится после выхода из сеанса и входа обратно.'
+else
+    echo
+    echo 'Не GNOME: расширение не нужно, агент работает сам.'
+    echo 'Запусти его в автостарте композитора: systemctl --user start dozor.service'
+fi
+
 echo 'Проверка: sudo true  ->  должно появиться окно Dozor.'
