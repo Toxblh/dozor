@@ -46,8 +46,12 @@ for state in /proc/acpi/button/lid/*/state; do
 	exit 0
 done
 
-if command -v busctl >/dev/null 2>&1; then
-	case "$(busctl get-property org.freedesktop.login1 /org/freedesktop/login1 \
+# Абсолютный путь намеренно: на ALT busctl идёт через alternatives, и пакеты
+# предоставляют именно /usr/bin/busctl. Вызов по имени заставил бы rpm вывести
+# зависимость от /bin/busctl, которую никто не предоставляет -> пакет стал бы
+# неустанавливаемым.
+if [ -x /usr/bin/busctl ]; then
+	case "$(/usr/bin/busctl get-property org.freedesktop.login1 /org/freedesktop/login1 \
 	        org.freedesktop.login1.Manager LidClosed 2>/dev/null)" in
 		*true*) exit 1 ;;
 	esac

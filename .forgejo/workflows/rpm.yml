@@ -1,0 +1,41 @@
+name: rpm
+on:
+  push:
+    branches: [master]
+    tags: ['*']
+  workflow_dispatch:
+
+env:
+  APP_NAME: dozor
+
+jobs:
+  build:
+    runs-on: als-huge
+    timeout-minutes: 40
+    container:
+      image: altlinux.space/actions/runner/hasherc:sisyphus
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [sisyphus, p11]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/build-rpm-action@a29a423f8a77bfa2f5e9b42aa9fae85fa7fc75f5
+        name: Build RPMs (${{ matrix.branch }})
+        with:
+          branch: ${{ matrix.branch }}
+
+      - name: Remove debuginfo RPMs
+        run: |
+          find -L ~/.cache/hasherc/${{ env.APP_NAME }}/out/RPMS -type f -name '*debuginfo*.rpm' -delete
+
+      - uses: actions/upload-rpm-action@7ed97151a2a1f53a5b97f8a9f20778f771bbae59
+        name: Upload RPMs
+        with:
+          directory: ~/.cache/hasherc/${{ env.APP_NAME }}/out/RPMS
+          token: ${{ secrets.TOKEN }}
+          group: ${{ matrix.branch }}

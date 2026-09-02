@@ -90,6 +90,21 @@ sudo → PAM (pam_exec) → dozor-sudo.sh → pkcheck(ru.toxblh.dozor.sudo)
 
 ## Install
 
+**From the ALT package registry** (ALT / ALT Atomic):
+
+```sh
+sudo apm system install -y dozor      # or: apt-get install dozor
+sudo dozor-setup enable               # wire the PAM hook into /etc/pam.d/sudo
+systemctl --user enable --now dozor.service
+gnome-extensions enable dozor@toxblh.ru   # GNOME only, needs a re-login
+```
+
+The package deliberately does **not** edit `/etc/pam.d/sudo` from `%post`:
+that file is on the authentication path, so wiring it is an explicit,
+reversible step (`dozor-setup disable` removes it, both keep a backup).
+
+**From source:**
+
 ```sh
 ./install.sh          # builds with meson, installs to ~/.local/bin
 ```
