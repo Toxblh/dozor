@@ -1,0 +1,4 @@
+option('systemd_userunitdir', type: 'string', value: '/lib/systemd/user',
+       description: 'Каталог для systemd user unit (в пакете /lib/systemd/user, локально ~/.config/systemd/user)')
+option('gnome_extensiondir', type: 'string', value: '',
+       description: 'Каталог расширений GNOME Shell; пусто = <datadir>/gnome-shell/extensions')

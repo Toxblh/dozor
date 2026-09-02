@@ -5,7 +5,7 @@ After=graphical-session.target
 
 [Service]
 Type=exec
-ExecStart=%h/.local/bin/dozor-agent
+ExecStart=@BINDIR@/dozor-agent
 Restart=on-failure
 RestartSec=3
 Slice=session.slice

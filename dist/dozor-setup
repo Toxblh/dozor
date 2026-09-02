@@ -1,0 +1,79 @@
+#!/bin/sh
+# Подключение/отключение Dozor в PAM-стеке sudo.
+#
+# Намеренно НЕ делается из %post пакета: /etc/pam.d/sudo — файл пути
+# аутентификации, и автоматическая правка его на произвольной машине при
+# установке пакета слишком рискованна. Пакет только кладёт файлы, а вписывает
+# строку администратор — этой командой, осознанно.
+#
+# Правка сама по себе fail-safe: строка помечена `sufficient`, а хук при любой
+# осечке (нет агента, ssh-сессия, таймаут) возвращает ненулевой код, и PAM
+# просто идёт дальше к обычному паролю. Никого не пускает, только добавляет
+# графический путь.
+set -eu
+
+PAM_FILE=/etc/pam.d/sudo
+HOOK=/etc/security/dozor-sudo.sh
+LINE='auth		sufficient	pam_exec.so quiet /etc/security/dozor-sudo.sh'
+
+usage() {
+	cat <<EOF
+Использование: dozor-setup {enable|disable|status}
+
+  enable   вписать хук Dozor первой строкой в $PAM_FILE (с бэкапом)
+  disable  убрать строку хука
+  status   показать текущее состояние
+EOF
+}
+
+need_root() {
+	[ "$(id -u)" = 0 ] || { echo "нужен root: sudo dozor-setup $1" >&2; exit 1; }
+}
+
+is_enabled() { grep -q 'dozor-sudo\.sh' "$PAM_FILE" 2>/dev/null; }
+
+case "${1:-status}" in
+status)
+	if is_enabled; then echo "Dozor в $PAM_FILE: ВКЛЮЧЕН"; else echo "Dozor в $PAM_FILE: выключен"; fi
+	[ -x "$HOOK" ] && echo "хук: $HOOK на месте" || echo "хук: $HOOK ОТСУТСТВУЕТ"
+	systemctl --user is-enabled dozor.service 2>/dev/null | sed 's/^/агент (user unit): /' || true
+	;;
+enable)
+	need_root enable
+	[ -x "$HOOK" ] || { echo "нет $HOOK - пакет установлен не полностью" >&2; exit 1; }
+	if is_enabled; then echo "уже включено, ничего не делаю"; exit 0; fi
+	[ -f "$PAM_FILE" ] || { echo "нет $PAM_FILE" >&2; exit 1; }
+
+	backup="$PAM_FILE.dozor-backup.$(date +%Y%m%d%H%M%S)"
+	cp -a "$PAM_FILE" "$backup"
+
+	# вписываем ПОСЛЕ строки "#%PAM-1.0", т.е. первой значащей
+	tmp=$(mktemp) || exit 1
+	awk -v line="$LINE" 'NR==1 { print; print line; next } { print }' "$PAM_FILE" > "$tmp"
+
+	# страховка: файл должен остаться непустым и содержать исходные auth-строки
+	if [ ! -s "$tmp" ] || [ "$(grep -c '^auth' "$tmp")" -lt "$(grep -c '^auth' "$PAM_FILE")" ]; then
+		rm -f "$tmp"
+		echo "правка выглядит некорректной, откат; файл не тронут" >&2
+		exit 1
+	fi
+	cat "$tmp" > "$PAM_FILE"      # сохраняем владельца и права исходного файла
+	rm -f "$tmp"
+	echo "включено. бэкап: $backup"
+	echo "проверь в ДРУГОМ терминале: sudo -k && sudo true"
+	;;
+disable)
+	need_root disable
+	is_enabled || { echo "и так выключено"; exit 0; }
+	backup="$PAM_FILE.dozor-backup.$(date +%Y%m%d%H%M%S)"
+	cp -a "$PAM_FILE" "$backup"
+	tmp=$(mktemp) || exit 1
+	grep -v 'dozor-sudo\.sh' "$PAM_FILE" > "$tmp"
+	[ -s "$tmp" ] || { rm -f "$tmp"; echo "результат пуст, отменяю" >&2; exit 1; }
+	cat "$tmp" > "$PAM_FILE"
+	rm -f "$tmp"
+	echo "выключено. бэкап: $backup"
+	;;
+*)
+	usage; exit 1 ;;
+esac

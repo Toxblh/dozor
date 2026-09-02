@@ -14,7 +14,10 @@ PAM_LINE='auth\t\tsufficient\tpam_exec.so quiet /etc/security/dozor-sudo.sh'
 echo '== сборка агента =='
 command -v valac >/dev/null || { echo 'нужен valac (apm system install -y vala)'; exit 1; }
 command -v meson >/dev/null || { echo 'нужен meson (apm system install -y meson)'; exit 1; }
-[ -d "$HERE/build" ] || command meson setup "$HERE/build" --prefix="$HOME/.local"
+[ -d "$HERE/build" ] || command meson setup "$HERE/build" --prefix="$HOME/.local" \
+    -Dsystemd_userunitdir="$HOME/.config/systemd/user" \
+    -Dgnome_extensiondir="$HOME/.local/share/gnome-shell/extensions" \
+    --sysconfdir=/etc
 command meson compile -C "$HERE/build"
 command meson install -C "$HERE/build" >/dev/null
 echo "агент: $HOME/.local/bin/dozor-agent"
@@ -35,8 +38,6 @@ sudo sh -eu -c "
 
 echo '== пользовательская часть =='
 mkdir -p ~/.local/share/gnome-shell/extensions ~/.config/systemd/user
-cp -r "$HERE/extension/dozor@toxblh.ru" ~/.local/share/gnome-shell/extensions/
-cp "$HERE/dozor.service" ~/.config/systemd/user/
 
 # миграция со старых имён
 systemctl --user disable awesome-sudo-agent.service 2>/dev/null || true
